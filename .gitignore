@@ -26,6 +26,7 @@ wallet_data.txt
 # Keep source TypeScript files
 !src/**/*.ts
 !src/action-providers/**/*.ts
-!src/action-providers/bobc-protocol/*.ts
-!src/action-providers/xocolatl/*.ts
+
+# Test outputs
+testoutputs/
     

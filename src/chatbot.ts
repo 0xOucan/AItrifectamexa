@@ -21,8 +21,7 @@ import * as fs from "fs";
 import * as readline from "readline";
 import { TelegramInterface } from "./telegram-interface";
 import "reflect-metadata";
-import { xocolatlActionProvider } from "./action-providers/xocolatl";
-import { bobcProtocolActionProvider } from "./action-providers/bobc-protocol";
+import { nillionDBActionProvider } from "./action-providers/nillion-db";
 import { createPublicClient, http } from 'viem';
 import { base, baseSepolia } from 'viem/chains';
 import { privateKeyToAccount } from "viem/accounts";
@@ -41,9 +40,18 @@ function validateEnvironment(): void {
 
   const requiredVars = [
     "OPENAI_API_KEY",
-    "NETWORK_ID",
-    "NETWORK_ID_2",
-    "WALLET_PRIVATE_KEY"
+    "WALLET_PRIVATE_KEY",
+    "SV_ORG_DID",
+    "SV_PRIVATE_KEY",
+    "SV_NODE1_URL",
+    "SV_NODE1_DID",
+    "SV_NODE2_URL",
+    "SV_NODE2_DID",
+    "SV_NODE3_URL",
+    "SV_NODE3_DID",
+    "SCHEMA_ID_SERVICE",
+    "SCHEMA_ID_BOOKING",
+    "SCHEMA_ID_REVIEW"
   ];
   
   requiredVars.forEach((varName) => {
@@ -60,60 +68,11 @@ function validateEnvironment(): void {
     process.exit(1);
   }
 
-  // Validate network IDs
-  const validNetworks = {
-    NETWORK_ID: ["base-sepolia"],
-    NETWORK_ID_2: ["base-mainnet", "base"] // Allow both forms
-  };
-
-  if (!validNetworks.NETWORK_ID.includes(process.env.NETWORK_ID!)) {
-    console.error(`Error: NETWORK_ID must be: base-sepolia`);
-    process.exit(1);
-  }
-
-  if (!validNetworks.NETWORK_ID_2.includes(process.env.NETWORK_ID_2!)) {
-    console.error(`Error: NETWORK_ID_2 must be: base-mainnet or base`);
-    process.exit(1);
-  }
-
   console.log("Environment validated successfully");
-  console.log(`Primary Network (Testnet): ${process.env.NETWORK_ID}`);
-  console.log(`Secondary Network (Mainnet): ${process.env.NETWORK_ID_2}`);
 }
 
 // Add this right after imports and before any other code
 validateEnvironment();
-
-// Add this right after the validateEnvironment() call
-console.log("Environment validated successfully");
-console.log("Network ID:", process.env.NETWORK_ID || "base-sepolia");
-
-async function selectNetwork(): Promise<string> {
-  const rl = readline.createInterface({
-    input: process.stdin,
-    output: process.stdout,
-  });
-
-  console.log("\nSelect network:");
-  console.log("1. Base Sepolia (Testnet)");
-  console.log("2. Base (Mainnet)");
-
-  const answer = await new Promise<string>((resolve) => {
-    rl.question("Enter your choice (1 or 2): ", resolve);
-  });
-  
-  rl.close();
-
-  switch (answer.trim()) {
-    case "1":
-      return "base-sepolia";
-    case "2":
-      return "base-mainnet";
-    default:
-      console.log("Invalid choice, defaulting to Base Sepolia");
-      return "base-sepolia";
-  }
-}
 
 /**
  * Initialize the agent with CDP Agentkit
@@ -124,16 +83,14 @@ async function initializeAgent() {
   try {
     console.log("Initializing agent...");
 
-    const selectedNetwork = await selectNetwork();
-    console.log(`Selected network: ${selectedNetwork}`);
-
     const privateKey = process.env.WALLET_PRIVATE_KEY;
 
     if (!privateKey) {
       throw new Error("Wallet private key not found in environment variables");
     }
 
-    const selectedChain = selectedNetwork === "base-mainnet" ? base : baseSepolia;
+    // Use baseSepolia (testnet) as the default chain
+    const selectedChain = baseSepolia;
 
     // Create Viem account and client
     const account = privateKeyToAccount(privateKey as `0x${string}`);
@@ -163,23 +120,19 @@ async function initializeAgent() {
 
     console.log("LLM initialized");
 
-    // Initialize AgentKit with only Xocolatl for now
+    // Initialize AgentKit with Nillion DB
     const agentkit = await AgentKit.from({
       walletProvider,
       actionProviders: [
-        wethActionProvider(),
-        pythActionProvider(),
         walletActionProvider(),
-        erc20ActionProvider(),
-        xocolatlActionProvider(),
-        bobcProtocolActionProvider(),
+        nillionDBActionProvider(),
       ],
     });
 
     const tools = await getLangChainTools(agentkit);
     const memory = new MemorySaver();
     const agentConfig = {
-      configurable: { thread_id: "CDP AgentKit Chatbot Example!" },
+      configurable: { thread_id: "Moderia AI Marketplace Agent" },
     };
 
     const agent = createReactAgent({
@@ -187,70 +140,59 @@ async function initializeAgent() {
       tools,
       checkpointSaver: memory,
       messageModifier: `
-        You are a helpful agent that can interact onchain using the Coinbase Developer Platform AgentKit. You are 
-        empowered to interact onchain using your tools. 
+        You are Moderia, a helpful AI marketplace agent that mediates digital deals between service providers and clients.
+        Your main purpose is to facilitate service bookings, handle payments, and mediate disputes between parties.
         
-        Current Network: ${selectedNetwork === "base-mainnet" ? "Base Mainnet" : "Base Sepolia Testnet"}
+        🌟 MODERIA: "Modern mediator for digital deals" 🌟
         
-        Available Protocols:
-
-        1. Xocolatl (XOC) - Mexican Peso Stablecoin on Base Mainnet:
         Core Features:
-        - Transfer and approve XOC tokens
-        - Check XOC balances
-        - Deposit/withdraw collateral (WETH, CBETH)
-        - Mint XOC using collateral
-        - Liquidate undercollateralized positions
-
-        Alux Lending Protocol Integration:
-        - Supply XOC to earn yield
-        - Supply WETH as collateral
-        - Borrow XOC against WETH collateral
-        - Repay borrowed XOC
-        - Withdraw supplied assets
-
-        2. BOBC Protocol - Bolivian Stablecoin on Base Sepolia:
-        - Claim WETH from faucet (testnet only)
-        - Deposit/withdraw WETH collateral
-        - Mint/burn BOBC
-        - Monitor health factor
-        - Liquidate positions
-        - Fixed rate: 1 USD = 7 BOB
-        - Minimum 200% collateralization
-
-        Important:
-        - Xocolatl only works on Base Mainnet
-        - BOBC only works on Base Sepolia
-        - Check network before operations
-        - Verify balances and allowances
-        - Monitor collateral ratios
-
-        Alux Protocol Operations Guide:
-        1. To Supply XOC:
-           - First approve XOC for Alux (0x7a8AE9bB9080670e2BAFb6Df3EA62968F4Ad8a88)
-           - Then supply XOC to earn yield
-
-        2. To Use WETH as Collateral:
-           - First approve WETH for Alux
-           - Supply WETH as collateral
-           - Borrow XOC against your WETH
-           - Repay XOC when needed
-           - Withdraw WETH when done
-
-        Example Commands:
-        XOC Operations:
-        - "approve 100 XOC for Alux protocol"
-        - "supply 100 XOC to Alux protocol"
-        - "withdraw 50 XOC from Alux protocol"
-
-        WETH Operations:
-        - "approve 0.1 WETH for Alux protocol"
-        - "supply 0.1 WETH as collateral to Alux"
-        - "borrow 50 XOC from Alux with variable rate"
-        - "repay 50 XOC to Alux with variable rate"
-        - "withdraw 0.1 WETH from Alux protocol"
-
-        Get the wallet details first to see what network you're on and what tokens are available.
+        
+        💼 Service Marketplace:
+        - Service providers can list their services with availability
+        - Clients can browse and book available services
+        - Handle secure payments and escrow
+        
+        📅 Booking Management:
+        - Create and confirm bookings
+        - Generate meeting links
+        - Send reminders
+        - Track service completion
+        
+        🤖 Meeting Participation:
+        - Join service calls to take notes
+        - Monitor quality and compliance
+        - Provide objective third-party oversight
+        
+        ⚖️ Dispute Resolution:
+        - Mediate disagreements between parties
+        - Review meeting notes for evidence
+        - Issue fair resolutions
+        - Handle refunds or compensation when necessary
+        
+        Service Types:
+        - Language classes
+        - Tutoring sessions
+        - Consulting appointments
+        - Coaching sessions
+        - Other professional services
+        
+        When responding to users, use these context emojis:
+        ℹ️ For general information
+        ✅ For successful operations
+        ❌ For errors or failures
+        📋 For listings and search results
+        🔧 For system operations
+        ⚖️ For dispute resolution
+        🔄 For status updates
+        
+        Example commands:
+        - "Create a new French class service for next Monday"
+        - "Find available tutoring sessions for math"
+        - "Book the Spanish class with Maria for tomorrow"
+        - "Complete my booking for math tutoring with review"
+        - "Resolve dispute for booking XYZ"
+        
+        Always maintain a helpful, neutral, and professional tone while mediating digital deals.
       `,
     });
 
@@ -271,8 +213,7 @@ async function runAutonomousMode(agent: any, config: any, interval = 10) {
   while (true) {
     try {
       const thought =
-        "Be creative and do something interesting on the blockchain. " +
-        "Choose an action or set of actions and execute it that highlights your abilities.";
+        "Be creative and help manage the marketplace by identifying any pending disputes or checking on upcoming bookings.";
 
       const stream = await agent.stream(
         { messages: [new HumanMessage(thought)] },
@@ -365,9 +306,51 @@ async function runTelegramMode(agent: any, config: any) {
 }
 
 /**
+ * Run a demo sequence showcasing Moderia's capabilities
+ */
+async function runDemoMode(agent: any, config: any) {
+  console.log("🎮 Starting demo mode...");
+  
+  const demoScenarios = [
+    "Create a new French tutoring service for next Monday at 2 PM, priced at $50 per hour",
+    "Show me available language tutoring services",
+    "Book the French tutoring service for Monday",
+    "Generate a meeting link for the French tutoring session",
+    "Complete the French tutoring booking and leave a 5-star review",
+    "Show me the booking history for French tutoring services",
+    "Report an issue with a tutoring session that was incomplete",
+    "Resolve the dispute for the tutoring session"
+  ];
+
+  for (const scenario of demoScenarios) {
+    console.log("\n🔄 Demo Action:", scenario);
+    console.log("-------------------");
+
+    const stream = await agent.stream(
+      { messages: [new HumanMessage(scenario)] },
+      config
+    );
+
+    for await (const chunk of stream) {
+      if ("agent" in chunk) {
+        console.log(chunk.agent.messages[0].content);
+      } else if ("tools" in chunk) {
+        console.log(chunk.tools.messages[0].content);
+      }
+      console.log("-------------------");
+    }
+
+    // Add a delay between scenarios for better readability
+    await new Promise(resolve => setTimeout(resolve, 2000));
+  }
+
+  console.log("\n✨ Demo completed! Type 'exit' to return to mode selection or continue chatting.");
+}
+
+/**
  * Choose whether to run in autonomous, chat, or telegram mode
  */
-async function chooseMode(): Promise<"chat" | "auto" | "telegram"> {
+async function chooseMode(): Promise<"chat" | "auto" | "telegram" | "demo"> {
   const rl = readline.createInterface({
     input: process.stdin,
     output: process.stdout,
@@ -381,6 +364,7 @@ async function chooseMode(): Promise<"chat" | "auto" | "telegram"> {
     console.log("1. chat      - Interactive chat mode");
     console.log("2. telegram  - Telegram bot mode");
     console.log("3. auto      - Autonomous action mode");
+    console.log("4. demo      - Run demo sequence");
 
     const choice = (await question("\nChoose a mode (enter number or name): "))
       .toLowerCase()
@@ -394,6 +378,8 @@ async function chooseMode(): Promise<"chat" | "auto" | "telegram"> {
       return "telegram";
     } else if (choice === "3" || choice === "auto") {
       return "auto";
+    } else if (choice === "4" || choice === "demo") {
+      return "demo";
     }
     console.log("Invalid choice. Please try again.");
   }
@@ -416,6 +402,8 @@ async function main() {
         await runChatMode(agent, config);
       } else if (mode === "telegram") {
         await runTelegramMode(agent, config);
+      } else if (mode === "demo") {
+        await runDemoMode(agent, config);
       } else {
         await runAutonomousMode(agent, config);
       }
